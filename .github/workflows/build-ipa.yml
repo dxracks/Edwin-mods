@@ -1,0 +1,95 @@
+name: Build IPA
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar proyecto
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT=$(find . -type d -name "ThreeOneOSSix.xcodeproj" -print -quit)
+
+          if [ -z "$PROJECT" ]; then
+            ZIP=$(find . -maxdepth 3 -type f -name "*.zip" -print -quit)
+
+            if [ -z "$ZIP" ]; then
+              echo "ERROR: No se encontró el proyecto ni un ZIP."
+              exit 1
+            fi
+
+            mkdir -p "$RUNNER_TEMP/source"
+            unzip -q "$ZIP" -d "$RUNNER_TEMP/source"
+
+            PROJECT=$(find "$RUNNER_TEMP/source" -type d -name "ThreeOneOSSix.xcodeproj" -print -quit)
+          fi
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: No se encontró ThreeOneOSSix.xcodeproj"
+            exit 1
+          fi
+
+          echo "PROJECT_PATH=$PROJECT" >> "$GITHUB_ENV"
+          echo "Proyecto encontrado: $PROJECT"
+
+      - name: Comprobar Xcode
+        run: |
+          xcodebuild -version
+          xcodebuild -list -project "$PROJECT_PATH"
+
+      - name: Compilar aplicación
+        run: |
+          set -euo pipefail
+
+          xcodebuild \
+            -project "$PROJECT_PATH" \
+            -scheme 3106 \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Crear IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP=$(find "$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos" \
+            -maxdepth 1 -type d -name "*.app" -print -quit)
+
+          if [ -z "$APP" ]; then
+            echo "ERROR: No se encontró la aplicación compilada."
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/package/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/package/Payload/"
+
+          cd "$RUNNER_TEMP/package"
+          zip -qry "$GITHUB_WORKSPACE/3106-unsigned.ipa" Payload
+
+          echo "IPA creado correctamente."
+
+      - name: Subir IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3106-IPA
+          path: 3106-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
